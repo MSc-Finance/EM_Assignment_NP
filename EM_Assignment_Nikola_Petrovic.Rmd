@@ -1,0 +1,274 @@
+---
+title: "EM Assignments Part 1 and Part 2"
+subtitle: "Replicating Statistics for Taxable Income to Income"
+author: "Put in your name Nikola Petrovic"
+output: 
+  pdf_document:
+    toc: yes
+    number_sections: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+    toc_float:
+      collapsed: no
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+#runtime: shiny_prerendered
+bibliography: assignment.bib  
+---
+
+```{r setup, message = FALSE, echo= FALSE}
+knitr::opts_chunk$set(message = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(RSQLite)
+library(dbplyr)
+library(scales)
+library(lmtest)
+library(sandwich)
+library(googledrive)
+library(ggplot2)
+library(kableExtra)
+db_path <- "/home/shared/data/tidy_finance.sqlite"
+```
+
+@Chen2021 [Chen and Zimmermann 2021, Open Source Cross-Sectional Asset Pricing]
+
+```{r crsp, eval = FALSE, echo = FALSE}
+tidy_finance <- dbConnect(
+  SQLite(),
+  db_path,
+  extended_types = TRUE
+)
+
+signals <- tbl(tidy_finance, "signals") |>
+  select(permno, yyyymm, tax) |> 
+  collect()
+
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly") |>
+  collect()
+
+crsp_monthly <- crsp_monthly |>
+  select(
+    permno, gvkey, month, ret_excess, ret,
+    mktcap, mktcap_lag, exchange
+  ) |>
+  drop_na()
+
+crsp_monthly_signal <- crsp_monthly |> mutate(yyyymm=year(month)*100+month(month)) |> 
+  left_join(signals,by=c("permno","yyyymm"))
+```
+
+# Abstract
+
+The aim of this paper is to reconstruct the replication made by @Chen2021 of the predictor "Taxable Income to Income" (Tax) initially launched by @LevNissim2004. Empirical finance is in its methods focused on explaining the relationship between payoffs and potentially related factors, where credibility is at it forefron. Therefore, I conducted robustness tests on the selected predictor Tax.
+
+# Introduction
+
+The selected predictor "Taxable Income to Income" identified by @LevNissim2004(p.59) is defined as the share of tax compared to income. It is important to note that only income taxes are considered int this regard, including both payable taxes in domestic as well in foreign jurisdictions.
+
+# Methodology
+
+In order to conduct replication efforts, it is primary necessary to "clean" the data from the Center for Research in Security Prices, this is capturing the right cross-section which ranges from 1973 to 2000 for the selected predictor *Tax*.
+
+```{r, eval = FALSE, echo = FALSE}
+crsp_monthly_signal <- crsp_monthly_signal %>% 
+  filter(month >= as.Date('1973-12-01'), 
+         month <= as.Date('2000-12-31'))
+crsp_monthly_signal <- crsp_monthly_signal %>%
+  mutate(ret_excess = replace_na(ret_excess, 0))
+```
+
+# Assignment 1
+
+## Results and Interpretation
+
+In the conducted replication effort, the mean return of 0.82% deviates from the reproduction by 0.37%, which already displays certain inconsistency. When looking at the obtained t-stat of 1.097, it is reasonably clear, that it strongly disconnects to the reproducted t-stat of 3.52 and 3.9 in the original study. Thus, following the manual replication, the predictor *Tax* could be considered weak significant, while I recommend to consult the results from the original paper, as it proves to be highly significant and is confirmed by reproduction research.
+
+```{r, eval = FALSE, echo = FALSE}
+mean_returns <- crsp_monthly_signal %>%
+  summarize(
+    mean_ret_excess = mean(ret_excess, na.rm = TRUE)  
+  )
+
+linear_reg <- lm(ret_excess ~ 1 + tax, data = crsp_monthly_signal)
+
+tax_coefficients <- coef(summary(linear_reg))["tax", "t value"]
+print(tax_coefficients)
+
+
+m_t <- data.frame(
+  Metric = c("Mean Excess Return", "T-Stat for Tax"),
+  Value = c(mean_returns, tax_coefficients)  
+)
+
+colnames(m_t) <- c("Metric", "Value")
+
+table_1 <- kable(m_t, 
+                 format = "latex", 
+                 booktabs = TRUE,
+                 caption = "\\textbf{Table 1: Summary Statistics}") %>%
+  
+  column_spec(2, bold = TRUE, color = "blue") %>%
+  kable_styling("latex", font_size = 11)
+```
+
+Next the relation of the SML-line to the market beta as well to the predictor *Tax* will be analyzed.
+
+```{r, eval = TRUE, echo = FALSE}
+factors_ff3_monthly <- tbl(tidy_finance, "factors_ff3_monthly") |>
+  select(month, mkt_excess) |>
+  collect()
+
+beta <- tbl(tidy_finance, "beta") |>
+  select(permno, month, beta_monthly) |>
+  collect()
+
+sml_capm <- lm(ret_excess ~ 1 + tax, data = crsp_monthly_signal)$coefficients  
+
+# Plot
+ggplot(crsp_monthly_signal, aes(
+  x = tax,
+  y = ret_excess, 
+  color = "Portfolio" 
+)) +
+
+  geom_point() +
+
+  geom_abline(
+    intercept = 0,
+    slope = 0.05, 
+    linetype = "solid"
+  ) +
+
+  geom_abline(
+    intercept = sml_capm[1],
+    slope = sml_capm[2],
+    linetype = "dashed"
+  ) +
+
+  scale_y_continuous(
+    labels = scales::percent,
+    limit = c(0, 0.1) 
+  ) +
+  scale_x_continuous(limits = c(0, 0.5)) +
+  labs(
+    x = "Tax", 
+    y = "Excess Return",
+    title = "Average Excess Returns vs Tax"
+  )
+```
+
+```{r, echo=FALSE, message=FALSE, eval=TRUE}
+ggplot(crsp_monthly_signal, aes(x = tax, y = ret_excess)) +
+
+  geom_point(color = "blue") +
+
+  geom_abline(
+    intercept = 0,
+    slope = 0.05 # slope coefficient from regression
+  ) +
+
+  labs(
+    title = "Tax vs. Excess Returns",
+    x = "Tax Rate",
+    y = "Monthly Excess Return" 
+  )
+
+ggsave("tax_returns_plot.png", width = 8, height = 6)
+
+```
+
+# Assignment 2
+
+## Results, Robustness and Interpretation 2
+
+```{r setup, message = FALSE, warning = FALSE, echo= FALSE}
+size <- crsp_monthly_signal |> 
+  select(month, mktcap)
+
+# Dependent sort
+size_sorted <- size |>
+  arrange(tax) |>
+  mutate(size_quintile = ntile(size, 5))
+
+size_ret <- size_sorted |>
+  left_join(crsp_monthly_signal, by="month") 
+
+size_ret |>
+  group_by(size_quintile) |>
+  summarize(ret_excess = mean(ret_excess))
+
+crsp_monthly_signal |>
+  mutate(tax_quintile = ntile(tax, 5)) |>
+  left_join(size_sorted, by = c("month", "tax_quintile")) |>
+  group_by(tax_quintile, size_quintile) |>
+  summarize(ret_excess = mean(ret_excess))
+
+
+portfolio_data <- crsp_monthly_signal |>
+  mutate(
+    portfolio_tax = ntile(tax, 5),
+    portfolio_size = ntile(size, 5)
+  )
+
+portfolio_data |>
+  group_by(month, portfolio_tax, portfolio_size) |>
+  summarize(ret_excess = mean(ret_excess))
+
+# Value 
+value_premium <- portfolio_data |> 
+  group_by(month, portfolio_tax) |>
+  summarize(ret_excess = mean(ret_excess)) |>
+  summarize(
+    value_prem = ret_excess[portfolio_tax == 5] - ret_excess[portfolio_tax == 1]
+  )
+
+mean(value_prem)
+```
+
+## Fama-MacBeth Results and Interpretation
+
+```{r setup, message = FALSE, warning = FALSE, echo= FALSE}
+factors <- tbl(tidy_finance, "factors_ff3_monthly") |>
+  select(month, mkt_rf, smb, hml) |>
+  collect()
+
+fm_data <- crsp_monthly_signal |>
+  left_join(factors, by = "month")
+
+fmb_reg <- fm_data |>
+  group_by(month) |>
+  do(model = lm(ret_excess ~ mkt_rf + smb + hml + tax, data = .)) 
+
+fmb_coefs <- fmb_reg |>
+  tidy(model) |>
+  filter(term != "(Intercept)") |>
+  group_by(term) |>
+  summarize(prem = mean(estimate))
+
+print(fmb_coefs$prem["tax"])
+
+# Tax Premium
+tax_prem <- fmb_coefs$prem["tax"]
+tax_tstat <- fmb_coefs$prem["tax_std.error"]
+
+
+annual_tax_prem <- tax_prem * 12 
+
+print(paste0("The monthly tax premium is: ", round(tax_prem, 4)))
+print(paste0("The annualized tax premium is: ", round(annual_tax_prem, 3), "%"))
+
+print(paste0("The t-statistic is: ", round(tax_tstat, 2)))
+if(abs(tax_tstat) > 1.96) {
+  print("The tax premium is statistically significant at the 5% level")  
+} else {
+  print("The tax premium is not statistically significant")
+}
+```
+
+# References
+
+@Assignments.bib
